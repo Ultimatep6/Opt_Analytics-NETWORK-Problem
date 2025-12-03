@@ -11,7 +11,7 @@ Goods are transported from production sites to factories, then between factories
 
 ## Key Features
 - **One-way and Two-way Paths:** Connections between nodes can be unidirectional or bidirectional.
-- **Time Interval Activation:** Some connections are only available during specific time intervals.
+- **Time Interval Activation:** Some connections are only available during specific time intervals. The time will span *100s*
 - **Maximum Throughput:** Each connection has a maximum capacity (throughput) that cannot be exceeded.
 
 ## Mathematical Formulation
@@ -30,7 +30,8 @@ Let $C_{ijk}^t$ be the maximum throughput for connection $(i, j, k)$ at time $t$
 - Minimize total transportation cost or maximize throughput, depending on the scenario.
 
 ## Implementation
-This structure allows for flexible modeling and can be implemented using Python with libraries such as PuLP or Pyomo. The model can be extended to include additional constraints or objectives as needed.
+This structure allows for flexible modeling and can be implemented using Python with libraries Pyomo. \
+The problem will be modelled as a single problem, then it will be solved over every time step for $t \in [0,100]$. The option of parralelization is not possible because $sol(t_2) \propto sol(t_1) \quad \forall t_2 > t_1$. 
 
 ---
 

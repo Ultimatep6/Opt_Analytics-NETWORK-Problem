@@ -82,6 +82,11 @@ def read_data(file_input=r'./in_files/default.in'):
         elif i == 8 + n_resources + 1 + n_factories * (n_resources + 1) + n_factories * (n_products + 1):
             parts = get_parts(line)
             max_time_offset, min_time_offset = float(parts[0]), float(parts[1])
+            
+
+        elif i == 10 + n_resources + 1 + n_factories * (n_resources + 1) + n_factories * (n_products + 1):
+            parts = get_parts(line)
+            sim_time = float(parts[0])
             break
 
         
@@ -111,7 +116,32 @@ def read_data(file_input=r'./in_files/default.in'):
     print(f"Time Intervals: Max {max_time_interval}, Min {min_time_interval}")
     print(f"Time Offsets: Max {max_time_offset}, Min {min_time_offset}")
     print("*"*40)
+    print(f"Simulation Time: {sim_time}")
     print("\n")
+
+    problem_settings = {
+        'rows': rows,
+        'cols': cols,
+        'prop_one_way': prop_one_way,
+        'prop_two_way': prop_two_way,
+        'n_sources': n_sources,
+        'n_factories': n_factories,
+        'n_sinkholes': n_sinkholes,
+        'n_resources': n_resources,
+        'n_products': n_products,
+        'source_output_matrix': source_output_matrix,
+        'factory_io_resource_matrix': factory_io_resource_matrix,
+        'factory_io_products_matrix': factory_io_products_matrix,
+        'max_bottleneck': max_bottleneck,
+        'min_bottleneck': min_bottleneck,
+        'max_time_interval': max_time_interval,
+        'min_time_interval': min_time_interval,
+        'max_time_offset': max_time_offset,
+        'min_time_offset': min_time_offset,
+        'sim_time' : sim_time
+    }
+
+    return problem_settings
 
 
 if __name__ == "__main__":

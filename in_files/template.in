@@ -63,3 +63,5 @@
 <max_bottleneck> <min_bottleneck>
 <max_time_interval> <min_time_interval>
 <max_time_off> <min_time_off>
+
+<sim_time(s)>
