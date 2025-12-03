@@ -1,30 +1,64 @@
 <width_N> <height_M>
-<prop_one_way> <prop_two_way> #prop_no_way = prop_one_way - prop_two_way
+<prop_one_way> <prop_two_way> # Must add to 1
 
 <n_sources> <n_factories> <n_sinkholes>
 <n_resources> <n_products>
 
-# For each source we have a matrix of n_resourcesx1 (output)
-<output_res_1>
-<output_res_2>
+# We have a matrix of n_resources x n_sources (output)
+<source_1_output_res_1> <source_2_output_res_1> ... <source_n_output_res_1>
+<source_1_output_res_2> <source_2_output_res_2> ... <source_n_output_res_2>
 .
 .
 .
-<output_res_n>
+<source_1_output_res_n> <source_2_output_res_n> ... <source_n_output_res_n>
 
-# For each factory we have a matrix of n_resources+n_products x 2 (input,output)
-<input_res_1> <output_res_1>
-<input_res_2> <output_res_2>
+# We have a resource matrix of n_resources x 2 x n_factories (input,output)
+<fac_1_input_res_1> <fac_1_output_res_1>
+<fac_1_input_res_2> <fac_1_output_res_2>
 .
 .
 .
-<input_res_n> <output_res_n>
-<input_prod_1> <output_prod_1>
-<input_prod_2> <output_prod_2>
+<fac_1_input_res_n> <fac_1_output_res_n>
+
+<fac_2_input_res_1> <fac_2_output_res_1>
+<fac_2_input_res_2> <fac_2_output_res_2>
 .
 .
 .
-<input_prod_n> <output_prod_n>
+<fac_2_input_res_n> <fac_2_output_res_n>
+
+.
+.
+.
+
+<fac_n_input_res_1> <fac_n_output_res_1>
+<fac_n_input_res_2> <fac_n_output_res_2>
+.
+.
+.
+<fac_n_input_res_n> <fac_n_output_res_n>
+
+# We have a resource matrix of n_products x 2 x n_factories (input,output)
+<fac_1_input_prod_1> <fac_1_output_prod_1>
+<fac_1_input_prod_2> <fac_1_output_prod_2>
+.
+.
+.
+<fac_1_input_prod_n> <fac_2_output_prod_n>
+
+<fac_2_input_prod_1> <fac_2_output_prod_1>
+<fac_2_input_prod_2> <fac_2_output_prod_2>
+.
+.
+.
+<fac_2_input_prod_n> <fac_2_output_prod_n>
+
+<fac_n_input_prod_1> <fac_n_output_prod_1>
+<fac_n_input_prod_2> <fac_n_output_prod_2>
+.
+.
+.
+<fac_n_input_prod_n> <fac_n_output_prod_n>
 
 <max_bottleneck> <min_bottleneck>
 <max_time_interval> <min_time_interval>
