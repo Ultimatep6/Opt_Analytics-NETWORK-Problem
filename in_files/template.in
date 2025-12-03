@@ -1,0 +1,31 @@
+<width_N> <height_M>
+<prop_one_way> <prop_two_way> #prop_no_way = prop_one_way - prop_two_way
+
+<n_sources> <n_factories> <n_sinkholes>
+<n_resources> <n_products>
+
+# For each source we have a matrix of n_resourcesx1 (output)
+<output_res_1>
+<output_res_2>
+.
+.
+.
+<output_res_n>
+
+# For each factory we have a matrix of n_resources+n_products x 2 (input,output)
+<input_res_1> <output_res_1>
+<input_res_2> <output_res_2>
+.
+.
+.
+<input_res_n> <output_res_n>
+<input_prod_1> <output_prod_1>
+<input_prod_2> <output_prod_2>
+.
+.
+.
+<input_prod_n> <output_prod_n>
+
+<max_bottleneck> <min_bottleneck>
+<max_time_interval> <min_time_interval>
+<max_time_off> <min_time_off>
