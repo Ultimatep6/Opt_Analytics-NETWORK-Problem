@@ -17,8 +17,21 @@ def generate_neighbor_pairings_row_major(n, m):
 def node_to_row_index(row, col, cols):
     return row * cols + col
 
-
 def neighbors(node, rows, cols):
+    """
+    Given a node (row-major index), return its right and down neighbors in the grid.
+    """
+    i, j = node // cols, node % cols
+    neighbor_list = []
+    # Down neighbor
+    if i < rows - 1:
+        neighbor_list.append(node_to_row_index(i + 1, j, cols))
+    # Right neighbor
+    if j < cols - 1:
+        neighbor_list.append(node_to_row_index(i, j + 1, cols))
+    return neighbor_list
+
+def all_neighbors(node, rows, cols):
     """
     Given a node (i, j), return its valid neighbors in the grid.
     Neighbors are up, down, left, right (no diagonals) and given in Row-major order.
@@ -61,3 +74,18 @@ def get_desc_variables(model, time_step: int = None, material: int = None):
     return result
 
     
+def compute_net_flow(solver, node): # + is inflows, - is outflows
+    return sum(
+        sum(
+            solver.model.distributed_amounts[(k, node), m]
+            for k in all_neighbors(node, solver.rows, solver.cols)
+            if k < node
+            for m in range(solver.total_materials)
+        ),
+        sum(
+            -solver.model.distributed_amounts[(node, k), m]
+            for k in all_neighbors(node, solver.rows, solver.cols)
+            if k > node
+            for m in range(solver.total_materials)
+        )
+    )

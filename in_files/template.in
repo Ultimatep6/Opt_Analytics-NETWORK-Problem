@@ -38,7 +38,7 @@
 .
 <fac_n_input_res_n> <fac_n_output_res_n>
 
-# We have a resource matrix of n_products x 2 x n_factories (input,output)
+# We have a products matrix of n_products x 2 x n_factories (input,output)
 <fac_1_input_prod_1> <fac_1_output_prod_1>
 <fac_1_input_prod_2> <fac_1_output_prod_2>
 .
@@ -59,6 +59,14 @@
 .
 .
 <fac_n_input_prod_n> <fac_n_output_prod_n>
+
+# We have a products matrix of n_products x n_sinkholes (input)
+<sink_1_input_prod_1><sink_2_input_prod_1> ... <sink_n_input_prod_1>
+<sink_1_input_prod_2><sink_2_input_prod_2> ... <sink_n_input_prod_2>
+.
+.
+.
+<sink_1_input_prod_n><sink_2_input_prod_n> ... <sink_n_input_prod_n>
 
 <max_bottleneck> <min_bottleneck>
 <max_time_interval> <min_time_interval>
