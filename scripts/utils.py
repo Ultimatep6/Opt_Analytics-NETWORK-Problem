@@ -74,18 +74,53 @@ def get_desc_variables(model, time_step: int = None, material: int = None):
     return result
 
     
-def compute_net_flow(solver, node): # + is inflows, - is outflows
+def compute_net_flow_total(solver, node): # + is inflows, - is outflows
+    """ Computed the net flow at a given node by summing inflows and outflows of ALL materials"""
     return sum(
-        sum(
+        [sum(
             solver.model.distributed_amounts[(k, node), m]
             for k in all_neighbors(node, solver.rows, solver.cols)
             if k < node
-            for m in range(solver.total_materials)
+            for m in solver.model.products | solver.model.resources
         ),
         sum(
             -solver.model.distributed_amounts[(node, k), m]
             for k in all_neighbors(node, solver.rows, solver.cols)
             if k > node
-            for m in range(solver.total_materials)
-        )
+            for m in solver.model.products | solver.model.resources
+        )]
     )
+
+def compute_net_flow(solver, node, material): # + is inflows, - is outflows
+    """ Computed the net flow at a given node by summing inflows and outflows of a given material"""
+    return sum(
+        [sum(
+            solver.model.distributed_amounts[(k, node), material]
+            for k in all_neighbors(node, solver.rows, solver.cols)
+            if k < node
+        ),
+        sum(
+            -solver.model.distributed_amounts[(node, k), material]
+            for k in all_neighbors(node, solver.rows, solver.cols)
+            if k > node
+        )]
+    )
+
+def compute_required_flow(solver, object, node_type='source'):
+    if node_type == 'source':
+        out_flows = sum(solver.model.source_resource_supply[r, object] for r in solver.model.resources)
+        return -out_flows
+    
+    elif node_type == 'sinkhole':
+        in_flows = sum(solver.model.sinkhole_product_demand[m, object] for m in solver.model.products)
+        return in_flows
+
+    elif node_type == 'factory':
+        in_flows = sum(solver.model.factory_resource_demand[r, object] for r in solver.model.resources) + \
+                    sum(solver.model.factory_product_demand[p, object] for p in solver.model.products)
+        out_flows = sum(solver.model.factory_resource_supply[r, object] for r in solver.model.resources) + \
+                    sum(solver.model.factory_product_supply[p, object] for p in solver.model.products)
+
+        return in_flows - out_flows
+    else:
+        raise ValueError("Invalid node type. Must be 'source', 'sinkhole', or 'factory'.")

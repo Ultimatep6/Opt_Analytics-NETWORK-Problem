@@ -1,13 +1,13 @@
 from xml.parsers.expat import model
 from pyomo.environ import SolverFactory, ConcreteModel, RangeSet, Set, Var, Param, Constraint, Objective, minimize
-from pyomo.environ import NonNegativeReals, Any, Reals
+from pyomo.environ import NonNegativeReals, Any, Reals, Binary
 import os
 import random
 import numpy as np
 
 from read_data import read_data
 from utils import generate_neighbor_pairings_row_major, neighbors, all_neighbors, get_desc_variables, node_to_row_index
-from utils import compute_net_flow
+from utils import compute_net_flow, compute_required_flow, compute_net_flow_total
 
 class Solver:
     def __init__(self, solver_name='glpk', problem_dir='default.in'):
@@ -21,8 +21,8 @@ class Solver:
         self.solutions = np.zeros((self.settings['rows'], self.settings['cols'], int(self.settings['sim_time'])))
 
 
-    def solve(self):
-        for t in range(self.time_steps):
+    def solve_problem(self):
+        for t in range(int(self.time_steps)):
             results = self.solver.solve(self.model, tee=True)
         return results
     
@@ -71,6 +71,7 @@ class Solver:
         
         # print(f"Optimized connections is {len(self.connections_bad)/len(self.connections)} times smaller than necessary.")
 
+
         # Print the size of the problem
         print(f"Connections: {len(self.connections)}")
         print(f"Time Steps: {self.time_steps}")
@@ -84,11 +85,11 @@ class Solver:
         self.model.nodes = Set(initialize=self.nodes)
         #   - Connections (node a -> b)
         self.model.connections = Set(initialize=self.connections)
-        #   - Sources
+        #   - Sources (-)
         self.model.sources = Set(initialize=self.sources)
         #   - Factories
         self.model.factories = Set(initialize=self.factories)
-        #   - Sinkholes
+        #   - Sinkholes (+)
         self.model.sinkholes = Set(initialize=self.sinkholes)
 
         #   - Resources
@@ -98,7 +99,12 @@ class Solver:
 
         # Decision Variables:
         #   * Amount of material m moved from node a to node b at time step t ((ax,ay) -> (bx,by), t, m)
-        self.model.distributed_amounts = Var(self.connections, RangeSet(0, self.total_materials - 1), domain=Reals)
+        self.model.distributed_amounts = Var(self.connections, self.model.products | self.model.resources, domain=Reals)
+        # self.model.distributed_amounts.display()
+
+        """Objective Function 1 : Minimize the number of active connections used in the solution"""
+        self.model.is_active = Var(self.model.connections, self.model.products | self.model.resources, domain=Binary)
+        self.M = 1e6
 
     def model_params(self):
         """ SOURCE/FACTORY/SINKHOLE POSITION PARAMETERS
@@ -249,20 +255,38 @@ class Solver:
 
         """ NODE
                 - Flow"""
+        # Set all net_flows to 0
         flows = {i: 0 for i in self.model.nodes.data()}
+        # Remove special positions
+        for source, pos in self.model.source_positions.items():
+            flows.pop(pos)
+        for sinkhole, pos in self.model.sinkhole_positions.items():
+            flows.pop(pos)
         for factory, pos in self.model.factory_positions.items():
-            in_flows = sum(self.model.factory_resource_demand[r, factory] for r in self.model.resources) + \
-                        sum(self.model.factory_product_demand[p, factory] for p in self.model.products)
-            out_flows = sum(self.model.factory_resource_supply[r, factory] for r in self.model.resources) + \
-                        sum(self.model.factory_product_supply[p, factory] for p in self.model.products)
-            
-            flows[pos] = in_flows-out_flows
+            flows.pop(pos)
+
+        # # Set source flows (negative)
+        #     net_flow = compute_required_flow(self, source, node_type='source')
+        #     flows[pos] = net_flow
+        # # Set sinkhole flows (positive)
+        # for sinkhole, pos in self.model.sinkhole_positions.items():
+        #     net_flow = compute_required_flow(self, sinkhole, node_type='sinkhole')
+        #     flows[pos] = net_flow
+        # # Set factory flows (can be positive or negative)
+        # for factory, pos in self.model.factory_positions.items():
+        #     net_flow = compute_required_flow(self, factory, node_type='factory')
+        #     flows[pos] = net_flow
 
         self.model.flow_limits = Param(
             self.model.nodes,
             initialize=flows,
             mutable=False
         )
+
+        # self.model.flow_limits.display()
+        # self.model.factory_positions.display()
+        # self.model.sinkhole_positions.display()
+        # self.model.source_positions.display()
         
 
     def model_constraints(self):
@@ -286,13 +310,15 @@ class Solver:
         """ FLOW 
             - Equillibrium"""
         def flow_equilibrium(model, i):
-            net_flow = compute_net_flow(self, i)
-
+            if i not in model.flow_limits:
+                return Constraint.Skip
+            net_flow = compute_net_flow_total(self, i)
             if model.flow_limits[i] == 0:
                 return net_flow == 0
             # If the node is a source (negative flow limit)
-            elif model.flow_limits[i] > 0:
-                return net_flow >= model.flow_limits[i]
+            elif model.flow_limits[i] < 0:
+                return abs(net_flow) <= abs(model.flow_limits[i])
+            # If the node is a sinkhole (positive flow limit)
             else:
                 return net_flow <= model.flow_limits[i]
 
@@ -307,10 +333,11 @@ class Solver:
         #     return Constraint.Skip
 
         """   - Max Throughput"""
-        def max_throughput(model, path):
+        def max_throughput(model, a, b):
+            path = (a, b)
             flow = sum(
                 abs(model.distributed_amounts[path, m])
-                for m in range(self.total_materials)
+                for m in self.model.resources | self.model.products
             )
             return flow <= model.max_bottleneck[path]
         
@@ -327,58 +354,66 @@ class Solver:
                     return Constraint.Skip
                 
         """ SOURCE
-            - Supply"""
+            - Supply (Per Material)"""
+        # Given its supply the net flow is | | and must be less than supply
         def source_supply(model, s, m):
-            outflow = sum(
-                model.distributed_amounts[(model.source_positions[s], k), m]
-                for k in neighbors(model.source_positions[s], self.rows, self.cols)
-            )
-            return outflow <= model.source_resource_supply[m, s]
+            net_flow = compute_net_flow(self, model.source_positions[s], m)
+            return abs(net_flow) <= model.source_resource_supply[m, s]
         
         """ SINKHOLE
             - Demand"""
+        # Given its demand the net flow is positive in and must be greater than demand 
         def sinkhole_demand(model, sk, m):
-            inflow = sum(
-                model.distributed_amounts[(k, model.sinkhole_positions[sk]), m]
-                for k in neighbors(model.sinkhole_positions[sk], self.rows, self.cols)
-            )
-            return inflow >= model.sinkhole_product_demand[m, sk]
-        
+            net_flow = compute_net_flow(self, model.sinkhole_positions[sk], m)
+            return net_flow >= model.sinkhole_product_demand[m, sk]
+
         """ FACTORY
             - Demand"""
+        # Given its demand the net flow is positive in and must be greater than demand
         def factory_demand(model, f, m):
-            inflow = sum(
-                model.distributed_amounts[(k, model.factory_positions[f]), m]
-                for k in neighbors(model.factory_positions[f], self.rows, self.cols)
-            )
+            net_flow = compute_net_flow(self, model.factory_positions[f], m)
+            
             if m in model.resources:
-                return inflow >= model.factory_resource_demand[m, f]
+                return net_flow >= model.factory_resource_demand[m, f]
             elif m in model.products:
-                return inflow >= model.factory_product_demand[m, f]
+                return net_flow >= model.factory_product_demand[m, f]
             else:
                 raise ValueError("Material not found in resources or products.")
+            
         
         """ - Supply"""
+        # Given its supply the net flow is negative out and must be less than supply
         def factory_supply(model, f, m):
-            outflow = sum(
-                model.distributed_amounts[(model.factory_positions[f], k), m]
-                for k in neighbors(model.factory_positions[f], self.rows, self.cols)
-            )
+            net_flow = compute_net_flow(self, model.factory_positions[f], m)
+
             if m in model.resources:
-                return outflow <= model.factory_resource_supply[m, f]
+                return abs(net_flow) <= abs(model.factory_resource_supply[m, f])
             elif m in model.products:
-                return outflow <= model.factory_product_supply[m, f]
+                return abs(net_flow) <= abs(model.factory_product_supply[m, f])
             else:
                 raise ValueError("Material not found in resources or products.")
 
+
         self.model.flow_equilibrium = Constraint(self.model.nodes, rule=flow_equilibrium)
         # model.flow_direction = Constraint(model.nodes, rule=flow_direction)
-        self.model.max_throughput = Constraint(self.model.nodes, rule=max_throughput)
+        self.model.max_throughput = Constraint(self.model.connections, rule=max_throughput)
         self.model.source_supply = Constraint(self.model.sources, self.model.resources, rule=source_supply)
         self.model.sinkhole_demand = Constraint(self.model.sinkholes, self.model.products, rule=sinkhole_demand)
         self.model.factory_demand = Constraint(self.model.factories, self.model.resources | self.model.products, rule=factory_demand)
         self.model.factory_supply = Constraint(self.model.factories, self.model.resources | self.model.products, rule=factory_supply)
 
+        """ Objective Function 1 : Minimize the number of active connections used in the solution"""
+        def activation_constraint_upper(model, a, b, m):
+            i = (a, b)
+            return model.distributed_amounts[i, m] <= self.M * model.is_active[i, m]
+
+        def activation_constraint_lower(model, a, b, m):
+            i = (a, b)
+            return model.distributed_amounts[i, m] >= -self.M * model.is_active[i, m]
+
+        self.model.activation_upper = Constraint(self.model.connections, self.model.products | self.model.resources, rule=activation_constraint_upper)
+        self.model.activation_lower = Constraint(self.model.connections, self.model.products | self.model.resources, rule=activation_constraint_lower)
+    
     def build_model(self):
 
         self.model = ConcreteModel()
@@ -395,16 +430,14 @@ class Solver:
         # Define the Constraints
         self.model_constraints()
 
-        def obj_function(model):
-            """Simply how many connections are being activated in total"""
-            return sum(
-                1 if model.distributed_amounts[i, m] > 0 else 0
-                for i in model.connections
-                for m in range(model.total_materials)
-            )
+        def obj_function1(model):
+            return sum(model.is_active[i, m] for i in model.connections 
+                       for m in model.products | model.resources)
 
-        self.model.objective = Objective(rule=obj_function, sense=minimize)
-    
+        self.model.objective = Objective(rule=obj_function1, sense=minimize)
+
+
+        print(self.solve_problem())
     def display_results(self):
         raise NotImplementedError
     

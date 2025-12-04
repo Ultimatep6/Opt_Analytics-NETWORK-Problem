@@ -16,7 +16,8 @@ Goods are transported from production sites to factories, then between factories
 
 ## Mathematical Formulation
 Let $x_{ijk}^t$ be the amount of goods transported from node $i$ to node $j$ in layer $k$ during time interval $t$.
-Let $C_{ijk}^t$ be the maximum throughput for connection $(i, j, k)$ at time $t$.
+Let $C_{ijk}^t$ be the maximum throughput for connection $(i, j, k)$ at time $t$.\
+Let the flow to a given node $a_i^t$ at time $t$ be $(+)$ if the flow is **inwards** and $(-)$ if the flow is **outwards**
 
 **Constraints:**
 - Supply at production sites
@@ -25,6 +26,7 @@ Let $C_{ijk}^t$ be the maximum throughput for connection $(i, j, k)$ at time $t$
 - Arc capacity and directionality
 - Time-activated arcs: $x_{ijk}^t = 0$ if arc $(i,j)$ is inactive at $t$
 - Maximum throughput: $x_{ijk}^t \leq C_{ijk}^t$
+
 
 **Objective:**
 - Minimize total transportation cost or maximize throughput, depending on the scenario.
