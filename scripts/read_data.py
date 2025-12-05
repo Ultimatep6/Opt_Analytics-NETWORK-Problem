@@ -73,30 +73,30 @@ def read_data(file_input=r'./in_files/default.in'):
 
         elif i == 6 + n_resources + 1 + n_factories * (n_resources + 1) + n_factories * (n_products + 1):
             print("Row-idx :", i)
-            sinkhole_i_products_matrix = np.zeros((n_sinkholes, n_products), dtype=float)
-            for r in range(n_sinkholes):
+            sinkhole_i_products_matrix = np.zeros((n_products, n_sinkholes), dtype=float)
+            for r in range(n_products):
                 parts = get_parts(lines[i + r])
-                for c in range(n_products):
+                for c in range(n_sinkholes):
                     sinkhole_i_products_matrix[r][c] = float(parts[c])
             # Move index forward
             i += n_sinkholes + 1
             print("New Row-idx :", i)
 
-        elif i == 6 + n_resources + 1 + n_factories * (n_resources + 1) + n_factories * (n_products + 1) + n_sinkholes + 1:
+        elif i == 8 + n_resources + 1 + n_factories * (n_resources + 1) + n_factories * (n_products + 1) + n_sinkholes + 1:
             print(f"Row idx {i}")
             parts = get_parts(line)
             max_bottleneck, min_bottleneck = float(parts[0]), float(parts[1])
         
-        elif i == 7 + n_resources + 1 + n_factories * (n_resources + 1) + n_factories * (n_products + 1) + n_sinkholes + 1:
+        elif i == 9 + n_resources + 1 + n_factories * (n_resources + 1) + n_factories * (n_products + 1) + n_sinkholes + 1:
             parts = get_parts(line)
             max_time_interval, min_time_interval = float(parts[0]), float(parts[1])
         
-        elif i == 8 + n_resources + 1 + n_factories * (n_resources + 1) + n_factories * (n_products + 1) + n_sinkholes + 1:
+        elif i == 10 + n_resources + 1 + n_factories * (n_resources + 1) + n_factories * (n_products + 1) + n_sinkholes + 1:
             parts = get_parts(line)
             max_time_offset, min_time_offset = float(parts[0]), float(parts[1])
             
 
-        elif i == 10 + n_resources + 1 + n_factories * (n_resources + 1) + n_factories * (n_products + 1) + n_sinkholes + 1:
+        elif i == 12 + n_resources + 1 + n_factories * (n_resources + 1) + n_factories * (n_products + 1) + n_sinkholes + 1:
             parts = get_parts(line)
             sim_time = float(parts[0])
             break
@@ -110,7 +110,7 @@ def read_data(file_input=r'./in_files/default.in'):
     print("Resources {}, Products {}".format(n_resources, n_products))
     print("*"*40)
     print(f"Source Output Matrix Shape {source_output_matrix.shape}:")
-    for r in range(n_sinkholes):
+    for r in range(n_resources):
         print(f"Source {r+1}:")
         for c in range(n_sources):
             print(f"  Resource {c+1}: Output {source_output_matrix[r][c]}")
@@ -128,10 +128,10 @@ def read_data(file_input=r'./in_files/default.in'):
             print(f"  Products {r+1}: Input {factory_io_products_matrix[r][0][f]}, Output {factory_io_products_matrix[r][1][f]}")
     print("*"*40)
     print(f"Sinkhole Input Matrix Shape {sinkhole_i_products_matrix.shape}:")
-    for r in range(n_sinkholes):
+    for r in range(n_products):
         print(f"Sinkhole {r+1}:")
-        for c in range(n_products):
-            print(f"  Products {c+1}: Output {sinkhole_i_products_matrix[r][c]}")
+        for c in range(n_sinkholes):
+            print(f"  Products {c+1}: Input {sinkhole_i_products_matrix[r][c]}")
     print("*"*40)
     print(f"Bottleneck Limits: Max {max_bottleneck}, Min {min_bottleneck}")
     print(f"Time Intervals: Max {max_time_interval}, Min {min_time_interval}")

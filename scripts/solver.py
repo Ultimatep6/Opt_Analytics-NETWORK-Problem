@@ -1,13 +1,20 @@
+import json
 from xml.parsers.expat import model
-from pyomo.environ import SolverFactory, ConcreteModel, RangeSet, Set, Var, Param, Constraint, Objective, minimize
+from pyomo.environ import SolverFactory, ConcreteModel, RangeSet, Set, Var, Param, Constraint, Objective, minimize, maximize
 from pyomo.environ import NonNegativeReals, Any, Reals, Binary
 import os
 import random
 import numpy as np
 
+import dash
+from dash import dcc, html, Input, Output
+import plotly.graph_objs as go
+import pandas as pd
+
 from read_data import read_data
 from utils import generate_neighbor_pairings_row_major, neighbors, all_neighbors, get_desc_variables, node_to_row_index
-from utils import compute_net_flow, compute_required_flow, compute_net_flow_total
+from utils import compute_net_flow, compute_required_flow, compute_net_flow_total, compute_total_throughput
+
 
 class Solver:
     def __init__(self, solver_name='glpk', problem_dir='default.in'):
@@ -23,7 +30,7 @@ class Solver:
 
     def solve_problem(self):
         for t in range(int(self.time_steps)):
-            results = self.solver.solve(self.model, tee=True)
+            results = self.solver.solve(self.model, tee=False)
         return results
     
     def get_components(self):
@@ -83,7 +90,7 @@ class Solver:
         # Sets:
         #   - Nodes
         self.model.nodes = Set(initialize=self.nodes)
-        #   - Connections (node a -> b)
+        #   - Connections (node a -> b and b -> a)
         self.model.connections = Set(initialize=self.connections)
         #   - Sources (-)
         self.model.sources = Set(initialize=self.sources)
@@ -93,18 +100,18 @@ class Solver:
         self.model.sinkholes = Set(initialize=self.sinkholes)
 
         #   - Resources
-        self.model.resources = Set(initialize=lambda i : [f'resource_{i}' for i in range(self.settings['n_resources'])])
+        self.model.resources = Set(initialize=[f'resource_{i}' for i in range(self.settings['n_resources'])])
         #   - Products
-        self.model.products = Set(initialize=lambda i : [f'product_{i}' for i in range(self.settings['n_products'])])
+        self.model.products = Set(initialize=[f'product_{i}' for i in range(self.settings['n_products'])])
 
         # Decision Variables:
         #   * Amount of material m moved from node a to node b at time step t ((ax,ay) -> (bx,by), t, m)
-        self.model.distributed_amounts = Var(self.connections, self.model.products | self.model.resources, domain=Reals)
+        self.model.distributed_amounts = Var(self.connections, self.model.products | self.model.resources, domain=NonNegativeReals)
         # self.model.distributed_amounts.display()
 
-        """Objective Function 1 : Minimize the number of active connections used in the solution"""
-        self.model.is_active = Var(self.model.connections, self.model.products | self.model.resources, domain=Binary)
-        self.M = 1e6
+            # """Objective Function 1 : Minimize the number of active connections used in the solution"""
+            # self.model.is_active = Var(self.model.connections, domain=Binary)
+            # self.M = 1e6
 
     def model_params(self):
         """ SOURCE/FACTORY/SINKHOLE POSITION PARAMETERS
@@ -226,30 +233,36 @@ class Solver:
 
 
         """PATH PARAMETERS"""
-        rand_throughput = np.random.randint(self.min_throughput,self.max_throughput,size=(len(self.model.connections.data())))
-        rand_time_intervals = np.random.randint(self.min_time_interval,self.max_time_interval,size=(len(self.model.connections.data())))
-        rand_time_offsets = np.random.randint(self.min_time_offset,self.max_time_offset,size=(len(self.model.connections.data())))
+        neighbor_pairs = generate_neighbor_pairings_row_major(self.rows, self.cols, onedir=True)  # Only (a, b) where a < b
         
+        rand_throughput = np.random.randint(self.min_throughput,self.max_throughput,size=(len(neighbor_pairs)))
+        rand_time_intervals = np.random.randint(self.min_time_interval,self.max_time_interval,size=(len(neighbor_pairs)))
+        rand_time_offsets = np.random.randint(self.min_time_offset,self.max_time_offset,size=(len(neighbor_pairs)))
+
+        path_params = {}
+        for idx, (a,b) in enumerate(neighbor_pairs):
+            path_params[(a,b)] = (rand_throughput[idx], rand_time_intervals[idx], rand_time_offsets[idx])
+            path_params[(b,a)] = (rand_throughput[idx], rand_time_intervals[idx], rand_time_offsets[idx])
+
+
         """     - Throughput"""
         self.model.max_bottleneck = Param(
             self.model.connections,
-            initialize={self.model.connections.data()[i]:rand_throughput[i] for i in range(len(self.model.connections.data()))},
+            initialize={connection :path_params[connection][0] for connection in self.model.connections.data()},
             mutable=False
         )
-
-        # self.model.max_bottleneck.display()
 
         """     - Temporal (ON)"""
         self.model.time_intervals = Param(
             self.model.connections,
-            initialize={self.model.connections.data()[i]:rand_time_intervals[i] for i in range(len(self.model.connections.data()))},
+            initialize={connection :path_params[connection][1] for connection in self.model.connections.data()},
             mutable=False
         )
 
         """     - Temporal (OFF)"""
         self.model.time_offsets = Param(
             self.model.connections,
-            initialize={self.model.connections.data()[i]:rand_time_offsets[i] for i in range(len(self.model.connections.data()))},
+            initialize={connection :path_params[connection][2] for connection in self.model.connections.data()},
             mutable=False
         )
 
@@ -288,7 +301,6 @@ class Solver:
         # self.model.sinkhole_positions.display()
         # self.model.source_positions.display()
         
-
     def model_constraints(self):
         """ CONSTRAINTS: 
 
@@ -309,18 +321,17 @@ class Solver:
 
         """ FLOW 
             - Equillibrium"""
-        def flow_equilibrium(model, i):
-            if i not in model.flow_limits:
+        def flow_equilibrium(model, path):
+            # If the node is a source/sink/factory, skip
+            if path not in model.flow_limits:
                 return Constraint.Skip
-            net_flow = compute_net_flow_total(self, i)
-            if model.flow_limits[i] == 0:
+
+            # Compute net flow
+            net_flow = compute_net_flow_total(self, path)
+
+            # Non -source/sink/factory nodes must have net flow of 0
+            if model.flow_limits[path] == 0:
                 return net_flow == 0
-            # If the node is a source (negative flow limit)
-            elif model.flow_limits[i] < 0:
-                return abs(net_flow) <= abs(model.flow_limits[i])
-            # If the node is a sinkhole (positive flow limit)
-            else:
-                return net_flow <= model.flow_limits[i]
 
         """"    - Direction"""
         # TODO: Implement the flow_direction constraint logic here
@@ -333,43 +344,48 @@ class Solver:
         #     return Constraint.Skip
 
         """   - Max Throughput"""
+
         def max_throughput(model, a, b):
             path = (a, b)
+            # Avoid double counting by only considering one direction
+            if a > b :
+                return Constraint.Skip
             flow = sum(
-                abs(model.distributed_amounts[path, m])
+                # Sum the amounts in both directions for material m
+                model.distributed_amounts[(a,b), m] + model.distributed_amounts[(b,a), m]
                 for m in self.model.resources | self.model.products
             )
             return flow <= model.max_bottleneck[path]
         
-        """ TEMPORAL
-            - Closed/Open"""
-        def temporal(model, i, t):
-            if t == 0:
-                return Constraint.Skip
-            else:
-                if t >= model.time_intervals[i] + model.time_offsets[i] < model.time_intervals[i]:
-                    for m in range(self.total_materials):
-                        self.model.distributed_amounts[i, m] = 0
-                else:
-                    return Constraint.Skip
+        # """ TEMPORAL
+        #     - Closed/Open"""
+        # def temporal(model, i, t):
+        #     if t == 0:
+        #         return Constraint.Skip
+        #     else:
+        #         if t >= model.time_intervals[i] + model.time_offsets[i] < model.time_intervals[i]:
+        #             for m in range(self.total_materials):
+        #                 self.model.distributed_amounts[i, m] = 0
+        #         else:
+        #             return Constraint.Skip
                 
         """ SOURCE
             - Supply (Per Material)"""
-        # Given its supply the net flow is | | and must be less than supply
+        # Given its supply the net flow is negative (-) and must be larger than (-)supply
         def source_supply(model, s, m):
             net_flow = compute_net_flow(self, model.source_positions[s], m)
-            return abs(net_flow) <= model.source_resource_supply[m, s]
+            return net_flow >= -model.source_resource_supply[m, s]
         
         """ SINKHOLE
             - Demand"""
-        # Given its demand the net flow is positive in and must be greater than demand 
+        # Given its demand the net flow is positive (+) and must be greater than demand 
         def sinkhole_demand(model, sk, m):
             net_flow = compute_net_flow(self, model.sinkhole_positions[sk], m)
             return net_flow >= model.sinkhole_product_demand[m, sk]
 
         """ FACTORY
             - Demand"""
-        # Given its demand the net flow is positive in and must be greater than demand
+        # Given its demand the net flow is positive (+) and must be greater than demand
         def factory_demand(model, f, m):
             net_flow = compute_net_flow(self, model.factory_positions[f], m)
             
@@ -382,17 +398,16 @@ class Solver:
             
         
         """ - Supply"""
-        # Given its supply the net flow is negative out and must be less than supply
+        # Given its supply the net flow is negative (-) and must be more than (-)supply
         def factory_supply(model, f, m):
             net_flow = compute_net_flow(self, model.factory_positions[f], m)
 
             if m in model.resources:
-                return abs(net_flow) <= abs(model.factory_resource_supply[m, f])
+                return net_flow >= -model.factory_resource_supply[m, f]
             elif m in model.products:
-                return abs(net_flow) <= abs(model.factory_product_supply[m, f])
+                return net_flow >= -model.factory_product_supply[m, f]
             else:
                 raise ValueError("Material not found in resources or products.")
-
 
         self.model.flow_equilibrium = Constraint(self.model.nodes, rule=flow_equilibrium)
         # model.flow_direction = Constraint(model.nodes, rule=flow_direction)
@@ -402,17 +417,14 @@ class Solver:
         self.model.factory_demand = Constraint(self.model.factories, self.model.resources | self.model.products, rule=factory_demand)
         self.model.factory_supply = Constraint(self.model.factories, self.model.resources | self.model.products, rule=factory_supply)
 
-        """ Objective Function 1 : Minimize the number of active connections used in the solution"""
-        def activation_constraint_upper(model, a, b, m):
-            i = (a, b)
-            return model.distributed_amounts[i, m] <= self.M * model.is_active[i, m]
+        # """ Objective Function 1 : Minimize the number of active connections used in the solution"""
+        # def activation_constraint_upper(model, a, b, m):
+        #     i = (a, b)
+        #     # If flow > 0, then is_active must be 1.
+        #     return model.distributed_amounts[i, m] <= self.M * model.is_active[i]
 
-        def activation_constraint_lower(model, a, b, m):
-            i = (a, b)
-            return model.distributed_amounts[i, m] >= -self.M * model.is_active[i, m]
-
-        self.model.activation_upper = Constraint(self.model.connections, self.model.products | self.model.resources, rule=activation_constraint_upper)
-        self.model.activation_lower = Constraint(self.model.connections, self.model.products | self.model.resources, rule=activation_constraint_lower)
+        # self.model.activation_upper = Constraint(self.model.connections, self.model.products | self.model.resources, rule=activation_constraint_upper)
+        # # self.model.activation_lower = Constraint(self.model.connections, self.model.products | self.model.resources, rule=activation_constraint_lower)
     
     def build_model(self):
 
@@ -431,17 +443,237 @@ class Solver:
         self.model_constraints()
 
         def obj_function1(model):
-            return sum(model.is_active[i, m] for i in model.connections 
-                       for m in model.products | model.resources)
+            paths = generate_neighbor_pairings_row_major(self.rows, self.cols, onedir=True)
+        # Sum the difference between max bottleneck and actual flow for all connections and materials
+            return sum(model.max_bottleneck[connection] - compute_total_throughput(self, connection)
+                       for connection in paths)
 
-        self.model.objective = Objective(rule=obj_function1, sense=minimize)
+        self.model.objective = Objective(rule=obj_function1, sense=maximize)
 
+    def display_results(self, solution_dir='results.csv', load_model_dir=None):
+        # Read the results from CSV
+        df = pd.read_csv(rf"./out_files/{solution_dir}")
 
-        print(self.solve_problem())
-    def display_results(self):
-        raise NotImplementedError
-    
+        df['time'] = df['time'].astype(int)
+        
+        # Define colors for materials
+        materials = df['material'].unique()
+        colors = {}
+        color_list = ['red', 'blue', 'green', 'orange', 'purple', 'brown', 'pink', 'gray', 'olive', 'cyan']
+        for i, material in enumerate(materials):
+            colors[material] = color_list[i % len(color_list)]
+
+        paths = generate_neighbor_pairings_row_major(self.rows, self.cols, onedir=True)
+        # Convert node indices to (x, y) coordinates
+        paths_coords = {}
+        for path in paths:
+            a, b = path[0], path[1]
+            from_x, from_y = a % self.cols, a // self.cols
+            to_x, to_y = b % self.cols, b // self.cols
+            paths_coords[(a, b)] = (from_x, from_y, to_x, to_y)    
+        
+        def offset_parallel_line(x1, y1, x2, y2, offset=0.15):
+            """Create a parallel line offset perpendicular to the original line"""
+            # Calculate perpendicular direction
+            dx = x2 - x1
+            dy = y2 - y1
+            length = np.sqrt(dx**2 + dy**2)
+            if length == 0:
+                return x1, y1, x2, y2
+            # Perpendicular unit vector
+            perp_x = -dy / length
+            perp_y = dx / length
+            # Offset points
+            new_x1 = x1 + perp_x * offset
+            new_y1 = y1 + perp_y * offset
+            new_x2 = x2 + perp_x * offset
+            new_y2 = y2 + perp_y * offset
+            return new_x1, new_y1, new_x2, new_y2
+        
+        def create_arrow(x1, y1, x2, y2, offset=0):
+            """Create arrow points with optional offset"""
+            dx = x2 - x1
+            dy = y2 - y1
+            length = np.sqrt(dx**2 + dy**2)
+            if length == 0:
+                return [x1, x2], [y1, y2]
+            
+            # Apply offset if needed
+            if offset != 0:
+                perp_x = -dy / length
+                perp_y = dx / length
+                x1 += perp_x * offset
+                y1 += perp_y * offset
+                x2 += perp_x * offset
+                y2 += perp_y * offset
+            
+            # Recalculate after offset
+            dx = x2 - x1
+            dy = y2 - y1
+            length = np.sqrt(dx**2 + dy**2)
+            
+            # Arrow head parameters
+            arrow_size = 0.1
+            angle = np.pi / 6  # 30 degrees
+            
+            # Arrow head points
+            ax1 = x2 - arrow_size * length * (np.cos(np.arctan2(dy, dx) - angle))
+            ay1 = y2 - arrow_size * length * (np.sin(np.arctan2(dy, dx) - angle))
+            ax2 = x2 - arrow_size * length * (np.cos(np.arctan2(dy, dx) + angle))
+            ay2 = y2 - arrow_size * length * (np.sin(np.arctan2(dy, dx) + angle))
+            
+            # Return line with arrow head
+            return [x1, x2, ax1, x2, ax2], [y1, y2, ay1, y2, ay2]
+        
+        def plot_connections(from_x,from_y,to_x,to_y, name,
+                             mode='lines',default=True, legend=True):
+            if mode == 'arrows':
+                x,y = create_arrow(from_x, from_y, to_x, to_y, offset=0)
+            else:
+                x = [from_x, to_x]
+                y = [from_y, to_y]
+            if name in colors:
+                color = colors[name]
+                name = f'Flow of {name}'
+            else:
+                name = 'Connection'
+                color = 'gray'
+            return go.Scatter(
+                x=x,
+                y=y,
+                mode=mode,
+                line=dict(color=color, width=2),
+                name=name,
+                showlegend=legend,
+                hoverinfo='text',
+                visible=default
+                # hovertext=[name for _ in x]
+            )
+        
+        def default_figure(path_coords):
+            fig = go.Figure()
+
+            for (a, b), (from_x, from_y, to_x, to_y) in path_coords.items():
+                fig.add_trace(plot_connections(from_x, from_y, to_x, to_y, name='Connection', default=True, legend=False))
+            
+            # Add sources (diamonds)
+            source_x = []
+            source_y = []
+            for source, pos in self.model.source_positions.items():
+                x_coord = pos % self.cols
+                y_coord = pos // self.cols
+                source_x.append(x_coord)
+                source_y.append(y_coord)
+                print(f'Source {source}: position={pos}, coords=({x_coord}, {y_coord})')
+            
+            if source_x:
+                fig.add_trace(go.Scatter(
+                    x=source_x,
+                    y=source_y,
+                    mode='markers',
+                    marker=dict(symbol='diamond', color='green', size=15),
+                    name='Sources',
+                    showlegend=True,
+                    hoverinfo='text',
+                    hovertext=['Source' for _ in source_x]
+                ))
+            
+            # Add factories (triangles)
+            factory_x = []
+            factory_y = []
+            for factory, pos in self.model.factory_positions.items():
+                x_coord = pos % self.cols
+                y_coord = pos // self.cols
+                factory_x.append(x_coord)
+                factory_y.append(y_coord)
+                print(f'Factory {factory}: position={pos}, coords=({x_coord}, {y_coord})')
+            
+            if factory_x:
+                fig.add_trace(go.Scatter(
+                    x=factory_x,
+                    y=factory_y,
+                    mode='markers',
+                    marker=dict(symbol='triangle-up', color='orange', size=15),
+                    name='Factories',
+                    showlegend=True,
+                    hoverinfo='text',
+                    hovertext=['Factory' for _ in factory_x]
+                ))
+            
+            # Add sinkholes (octagons)
+            sinkhole_x = []
+            sinkhole_y = []
+            for sinkhole, pos in self.model.sinkhole_positions.items():
+                x_coord = pos % self.cols
+                y_coord = pos // self.cols
+                sinkhole_x.append(x_coord)
+                sinkhole_y.append(y_coord)
+                print(f'Sinkhole {sinkhole}: position={pos}, coords=({x_coord}, {y_coord})')
+            
+            if sinkhole_x:
+                fig.add_trace(go.Scatter(
+                    x=sinkhole_x,
+                    y=sinkhole_y,
+                    mode='markers',
+                    marker=dict(symbol='octagon', color='red', size=15),
+                    name='Sinkholes',
+                    showlegend=True,
+                    hoverinfo='text',
+                    hovertext=['Sinkhole' for _ in sinkhole_x]
+                ))
+
+            fig.update_layout(
+                title='Network Flow at Time',
+                xaxis_title='X Coordinate',
+                yaxis_title='Y Coordinate',
+                clickmode='event+select',
+                hovermode='closest'
+            )
+
+            fig.update_xaxes(showgrid=False, range=[-0.5, self.cols-0.5], visible=False)
+            fig.update_yaxes(showgrid=False, range=[-0.5, self.rows-0.5], visible=False)
+            
+            return fig
+        
+        def update_figure(selected_time, path_coords):
+            fig = default_figure(selected_time)
+
+            # Filter data for the selected time
+            df_time = df[df['time'] == selected_time]
+
+            # For each path we draw the flow lines for each material is not 0
+            # We update 
+
+            # Add flow connections for the selected time
+            for _, row in df_time.iterrows():
+                from_node = row['from_node']
+                to_node = row['to_node']
+                material = row['material']
+                flow = row['flow']
+
+                from_x, from_y = from_node % self.cols, from_node // self.cols
+                to_x, to_y = to_node % self.cols, to_node // self.cols
+
+                if flow > 0:
+                    fig.add_trace(plot_connections(from_x, from_y, to_x, to_y, name=material, mode='arrows', default=True))
+            
+            return fig
+        import plotly.io as pio
+        pio.show(default_figure(paths_coords))
+
+    def save_results(self, save_path='results.out', solution=''):
+        rows = []
+        for key in self.model.distributed_amounts.keys():
+            (a, b, mat) = key
+            flow = self.model.distributed_amounts[(a, b), mat].value
+            rows.append({'time': 0, 'from_node': a, 'to_node': b, 'material': mat, 'flow': flow})
+        df = pd.DataFrame(rows)
+        df.to_csv(rf"./out_files/{save_path}", index=False)
+
+        self.display_results(solution_dir=save_path)
+
 if __name__ == '__main__':
     solver = Solver(solver_name='glpk', problem_dir='default.in')
     solver.build_model()
-    
+    sol = solver.solve_problem()
+    solver.save_results(solution=sol)
