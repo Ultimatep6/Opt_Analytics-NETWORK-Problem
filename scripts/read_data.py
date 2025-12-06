@@ -110,10 +110,10 @@ def read_data(file_input=r'./in_files/default.in'):
     print("Resources {}, Products {}".format(n_resources, n_products))
     print("*"*40)
     print(f"Source Output Matrix Shape {source_output_matrix.shape}:")
-    for r in range(n_resources):
-        print(f"Source {r+1}:")
-        for c in range(n_sources):
-            print(f"  Resource {c+1}: Output {source_output_matrix[r][c]}")
+    for c in range(n_sources):
+        print(f"Source {c+1}:")
+        for r in range(n_resources):
+            print(f"  Resource {r+1}: Output {source_output_matrix[r][c]}")
     print("*"*40)
     print(f"Factory I/O Resource Matrix Shape {factory_io_resource_matrix.shape}:")
     for f in range(n_factories):
@@ -128,10 +128,10 @@ def read_data(file_input=r'./in_files/default.in'):
             print(f"  Products {r+1}: Input {factory_io_products_matrix[r][0][f]}, Output {factory_io_products_matrix[r][1][f]}")
     print("*"*40)
     print(f"Sinkhole Input Matrix Shape {sinkhole_i_products_matrix.shape}:")
-    for r in range(n_products):
-        print(f"Sinkhole {r+1}:")
-        for c in range(n_sinkholes):
-            print(f"  Products {c+1}: Input {sinkhole_i_products_matrix[r][c]}")
+    for c in range(n_sinkholes):
+        print(f"Sinkhole {c+1}:")
+        for r in range(n_products):
+            print(f"  Products {r+1}: Input {sinkhole_i_products_matrix[r][c]}")
     print("*"*40)
     print(f"Bottleneck Limits: Max {max_bottleneck}, Min {min_bottleneck}")
     print(f"Time Intervals: Max {max_time_interval}, Min {min_time_interval}")
