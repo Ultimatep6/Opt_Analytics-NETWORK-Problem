@@ -12,7 +12,7 @@ import plotly.graph_objs as go
 import pandas as pd
 
 from read_data import read_data
-from utils import generate_neighbor_pairings_row_major, neighbors, all_neighbors, get_desc_variables, node_to_row_index
+from utils import generate_neighbor_pairings_row_major, neighbors, all_neighbors, get_desc_variables, node_to_row_index, row_index_to_node
 from utils import compute_net_flow, compute_required_flow, compute_net_flow_total, compute_total_throughput
 
 
@@ -321,13 +321,13 @@ class Solver:
 
         """ FLOW 
             - Equillibrium"""
-        def flow_equilibrium(model, path):
+        def flow_equilibrium(model, path, material):
             # If the node is a source/sink/factory, skip
             if path not in model.flow_limits:
                 return Constraint.Skip
 
             # Compute net flow
-            net_flow = compute_net_flow_total(self, path)
+            net_flow = compute_net_flow(self, path, material)
 
             # Non -source/sink/factory nodes must have net flow of 0
             if model.flow_limits[path] == 0:
@@ -373,21 +373,21 @@ class Solver:
             - Supply (Per Material)"""
         # Given its supply the net flow is negative (-) and must be larger than (-)supply
         def source_supply(model, s, m):
-            net_flow = compute_net_flow(self, model.source_positions[s], m)
+            net_flow = compute_net_flow(self, model.source_positions[s], m, return_inflow=False)
             return net_flow >= -model.source_resource_supply[m, s]
         
         """ SINKHOLE
             - Demand"""
         # Given its demand the net flow is positive (+) and must be greater than demand 
         def sinkhole_demand(model, sk, m):
-            net_flow = compute_net_flow(self, model.sinkhole_positions[sk], m)
+            net_flow = compute_net_flow(self, model.sinkhole_positions[sk], m, return_inflow=True)
             return net_flow >= model.sinkhole_product_demand[m, sk]
 
         """ FACTORY
             - Demand"""
         # Given its demand the net flow is positive (+) and must be greater than demand
         def factory_demand(model, f, m):
-            net_flow = compute_net_flow(self, model.factory_positions[f], m)
+            net_flow = compute_net_flow(self, model.factory_positions[f], m, return_inflow=True)
             
             if m in model.resources:
                 return net_flow >= model.factory_resource_demand[m, f]
@@ -400,7 +400,7 @@ class Solver:
         """ - Supply"""
         # Given its supply the net flow is negative (-) and must be more than (-)supply
         def factory_supply(model, f, m):
-            net_flow = compute_net_flow(self, model.factory_positions[f], m)
+            net_flow = compute_net_flow(self, model.factory_positions[f], m, return_inflow=False)
 
             if m in model.resources:
                 return net_flow >= -model.factory_resource_supply[m, f]
@@ -409,7 +409,7 @@ class Solver:
             else:
                 raise ValueError("Material not found in resources or products.")
 
-        self.model.flow_equilibrium = Constraint(self.model.nodes, rule=flow_equilibrium)
+        self.model.flow_equilibrium = Constraint(self.model.nodes, self.model.products | self.model.resources, rule=flow_equilibrium)
         # model.flow_direction = Constraint(model.nodes, rule=flow_direction)
         self.model.max_throughput = Constraint(self.model.connections, rule=max_throughput)
         self.model.source_supply = Constraint(self.model.sources, self.model.resources, rule=source_supply)
@@ -450,216 +450,171 @@ class Solver:
 
         self.model.objective = Objective(rule=obj_function1, sense=maximize)
 
-    def display_results(self, solution_dir='results.csv', load_model_dir=None):
-        # Read the results from CSV
+    def display_results(self, solution_dir='results.out'):
+        """Display network flow visualization with toggleable material flows."""
+        from viz import draw_arrows, draw_default_lines, create_grid_points, COLOR_LIST
+        
+        # Read results
         df = pd.read_csv(rf"./out_files/{solution_dir}")
-
-        df['time'] = df['time'].astype(int)
         
-        # Define colors for materials
-        materials = df['material'].unique()
-        colors = {}
-        color_list = ['red', 'blue', 'green', 'orange', 'purple', 'brown', 'pink', 'gray', 'olive', 'cyan']
-        for i, material in enumerate(materials):
-            colors[material] = color_list[i % len(color_list)]
-
-        paths = generate_neighbor_pairings_row_major(self.rows, self.cols, onedir=True)
-        # Convert node indices to (x, y) coordinates
-        paths_coords = {}
-        for path in paths:
-            a, b = path[0], path[1]
-            from_x, from_y = a % self.cols, a // self.cols
-            to_x, to_y = b % self.cols, b // self.cols
-            paths_coords[(a, b)] = (from_x, from_y, to_x, to_y)    
+        # Initialize figure
+        fig = go.Figure()
         
-        def offset_parallel_line(x1, y1, x2, y2, offset=0.15):
-            """Create a parallel line offset perpendicular to the original line"""
-            # Calculate perpendicular direction
-            dx = x2 - x1
-            dy = y2 - y1
-            length = np.sqrt(dx**2 + dy**2)
-            if length == 0:
-                return x1, y1, x2, y2
-            # Perpendicular unit vector
-            perp_x = -dy / length
-            perp_y = dx / length
-            # Offset points
-            new_x1 = x1 + perp_x * offset
-            new_y1 = y1 + perp_y * offset
-            new_x2 = x2 + perp_x * offset
-            new_y2 = y2 + perp_y * offset
-            return new_x1, new_y1, new_x2, new_y2
+        # Add grid points and default connections
+        fig.add_trace(create_grid_points(self.rows, self.cols))
+        for trace in draw_default_lines(self.rows, self.cols):
+            fig.add_trace(trace)
         
-        def create_arrow(x1, y1, x2, y2, offset=0):
-            """Create arrow points with optional offset"""
-            dx = x2 - x1
-            dy = y2 - y1
-            length = np.sqrt(dx**2 + dy**2)
-            if length == 0:
-                return [x1, x2], [y1, y2]
-            
-            # Apply offset if needed
-            if offset != 0:
-                perp_x = -dy / length
-                perp_y = dx / length
-                x1 += perp_x * offset
-                y1 += perp_y * offset
-                x2 += perp_x * offset
-                y2 += perp_y * offset
-            
-            # Recalculate after offset
-            dx = x2 - x1
-            dy = y2 - y1
-            length = np.sqrt(dx**2 + dy**2)
-            
-            # Arrow head parameters
-            arrow_size = 0.1
-            angle = np.pi / 6  # 30 degrees
-            
-            # Arrow head points
-            ax1 = x2 - arrow_size * length * (np.cos(np.arctan2(dy, dx) - angle))
-            ay1 = y2 - arrow_size * length * (np.sin(np.arctan2(dy, dx) - angle))
-            ax2 = x2 - arrow_size * length * (np.cos(np.arctan2(dy, dx) + angle))
-            ay2 = y2 - arrow_size * length * (np.sin(np.arctan2(dy, dx) + angle))
-            
-            # Return line with arrow head
-            return [x1, x2, ax1, x2, ax2], [y1, y2, ay1, y2, ay2]
+        # Add special nodes
+        self._add_special_nodes(fig)
         
-        def plot_connections(from_x,from_y,to_x,to_y, name,
-                             mode='lines',default=True, legend=True):
-            if mode == 'arrows':
-                x,y = create_arrow(from_x, from_y, to_x, to_y, offset=0)
-            else:
-                x = [from_x, to_x]
-                y = [from_y, to_y]
-            if name in colors:
-                color = colors[name]
-                name = f'Flow of {name}'
-            else:
-                name = 'Connection'
-                color = 'gray'
-            return go.Scatter(
-                x=x,
-                y=y,
-                mode=mode,
-                line=dict(color=color, width=2),
-                name=name,
-                showlegend=legend,
+        # Load and process material flows
+        colors = COLOR_LIST.copy()
+        material_flows = {}
+        
+        for material in df['material'].unique():
+            material_flows[material] = {}
+            for _, row in df.iterrows():
+                if row['material'] == material and row['flow'] > 0:
+                    key = (row['from_node'], row['to_node'])
+                    material_flows[material][key] = row['flow']
+        
+        # Draw arrows for each material
+        material_colors = {}
+        annotation_counts = {}
+        
+        for material, paths in material_flows.items():
+            if not paths:
+                continue
+            
+            color = random.choice(colors)
+            colors.remove(color)
+            material_colors[material] = color
+            annotation_counts[material] = len(paths)
+            
+            x_starts, y_starts, x_ends, y_ends = [], [], [], []
+            for (from_node, to_node) in paths.keys():
+                x_starts.append(from_node % self.cols)
+                y_starts.append(from_node // self.cols)
+                x_ends.append(to_node % self.cols)
+                y_ends.append(to_node // self.cols)
+            
+            draw_arrows(fig, x_starts, y_starts, x_ends, y_ends, material=material, color=color)
+        
+        # Create toggle buttons for material visibility
+        buttons = self._create_toggle_buttons(material_colors, annotation_counts)
+        
+        # Update layout with buttons and styling
+        fig.update_layout(
+            template='plotly_dark',
+            title='Network Flow Visualization',
+            xaxis=dict(title='X', range=[-1, self.cols]),
+            yaxis=dict(title='Y', range=[-1, self.rows]),
+            updatemenus=[
+                dict(
+                    buttons=buttons,
+                    direction="up",
+                    pad={"r": 10, "t": 10},
+                    showactive=True,
+                    x=1.0,
+                    xanchor="right",
+                    y=0.0,
+                    yanchor="bottom"
+                )
+            ]
+        )
+        
+        fig.update_xaxes(showgrid=False)
+        fig.update_yaxes(showgrid=False)
+        fig.show()
+    
+    def _add_special_nodes(self, fig):
+        """Add source, factory, and sinkhole nodes to the figure."""
+        # Add sources
+        source_x, source_y = [], []
+        for source, pos in self.model.source_positions.items():
+            source_x.append(pos % self.cols)
+            source_y.append(pos // self.cols)
+        
+        if source_x:
+            fig.add_trace(go.Scatter(
+                x=source_x, y=source_y,
+                mode='markers',
+                marker=dict(symbol='diamond', color='green', size=15),
+                name='Sources',
+                showlegend=True,
                 hoverinfo='text',
-                visible=default
-                # hovertext=[name for _ in x]
+                hovertext=['Source' for _ in source_x]
+            ))
+        
+        # Add factories
+        factory_x, factory_y = [], []
+        for factory, pos in self.model.factory_positions.items():
+            factory_x.append(pos % self.cols)
+            factory_y.append(pos // self.cols)
+        
+        if factory_x:
+            fig.add_trace(go.Scatter(
+                x=factory_x, y=factory_y,
+                mode='markers',
+                marker=dict(symbol='triangle-up', color='orange', size=15),
+                name='Factories',
+                showlegend=True,
+                hoverinfo='text',
+                hovertext=['Factory' for _ in factory_x]
+            ))
+        
+        # Add sinkholes
+        sinkhole_x, sinkhole_y = [], []
+        for sinkhole, pos in self.model.sinkhole_positions.items():
+            sinkhole_x.append(pos % self.cols)
+            sinkhole_y.append(pos // self.cols)
+        
+        if sinkhole_x:
+            fig.add_trace(go.Scatter(
+                x=sinkhole_x, y=sinkhole_y,
+                mode='markers',
+                marker=dict(symbol='octagon', color='red', size=15),
+                name='Sinkholes',
+                showlegend=True,
+                hoverinfo='text',
+                hovertext=['Sinkhole' for _ in sinkhole_x]
+            ))
+    
+    def _create_toggle_buttons(self, material_colors, annotation_counts):
+        """Create dropdown buttons to toggle material visibility."""
+        buttons = []
+        num_annotations_so_far = 0
+        total_annotations = sum(annotation_counts.values())
+        
+        for material in material_colors.keys():
+            color = material_colors[material]
+            num_arrows = annotation_counts[material]
+            
+            relayout_args = {}
+            for i in range(total_annotations):
+                is_visible = num_annotations_so_far <= i < num_annotations_so_far + num_arrows
+                relayout_args[f"annotations[{i}].visible"] = is_visible
+            
+            num_annotations_so_far += num_arrows
+            
+            buttons.append(
+                dict(
+                    label=f"<span style='color:{color}'>◼</span> {material}",
+                    method="relayout",
+                    args=[relayout_args]
+                )
             )
         
-        def default_figure(path_coords):
-            fig = go.Figure()
-
-            for (a, b), (from_x, from_y, to_x, to_y) in path_coords.items():
-                fig.add_trace(plot_connections(from_x, from_y, to_x, to_y, name='Connection', default=True, legend=False))
-            
-            # Add sources (diamonds)
-            source_x = []
-            source_y = []
-            for source, pos in self.model.source_positions.items():
-                x_coord = pos % self.cols
-                y_coord = pos // self.cols
-                source_x.append(x_coord)
-                source_y.append(y_coord)
-                print(f'Source {source}: position={pos}, coords=({x_coord}, {y_coord})')
-            
-            if source_x:
-                fig.add_trace(go.Scatter(
-                    x=source_x,
-                    y=source_y,
-                    mode='markers',
-                    marker=dict(symbol='diamond', color='green', size=15),
-                    name='Sources',
-                    showlegend=True,
-                    hoverinfo='text',
-                    hovertext=['Source' for _ in source_x]
-                ))
-            
-            # Add factories (triangles)
-            factory_x = []
-            factory_y = []
-            for factory, pos in self.model.factory_positions.items():
-                x_coord = pos % self.cols
-                y_coord = pos // self.cols
-                factory_x.append(x_coord)
-                factory_y.append(y_coord)
-                print(f'Factory {factory}: position={pos}, coords=({x_coord}, {y_coord})')
-            
-            if factory_x:
-                fig.add_trace(go.Scatter(
-                    x=factory_x,
-                    y=factory_y,
-                    mode='markers',
-                    marker=dict(symbol='triangle-up', color='orange', size=15),
-                    name='Factories',
-                    showlegend=True,
-                    hoverinfo='text',
-                    hovertext=['Factory' for _ in factory_x]
-                ))
-            
-            # Add sinkholes (octagons)
-            sinkhole_x = []
-            sinkhole_y = []
-            for sinkhole, pos in self.model.sinkhole_positions.items():
-                x_coord = pos % self.cols
-                y_coord = pos // self.cols
-                sinkhole_x.append(x_coord)
-                sinkhole_y.append(y_coord)
-                print(f'Sinkhole {sinkhole}: position={pos}, coords=({x_coord}, {y_coord})')
-            
-            if sinkhole_x:
-                fig.add_trace(go.Scatter(
-                    x=sinkhole_x,
-                    y=sinkhole_y,
-                    mode='markers',
-                    marker=dict(symbol='octagon', color='red', size=15),
-                    name='Sinkholes',
-                    showlegend=True,
-                    hoverinfo='text',
-                    hovertext=['Sinkhole' for _ in sinkhole_x]
-                ))
-
-            fig.update_layout(
-                title='Network Flow at Time',
-                xaxis_title='X Coordinate',
-                yaxis_title='Y Coordinate',
-                clickmode='event+select',
-                hovermode='closest'
-            )
-
-            fig.update_xaxes(showgrid=False, range=[-0.5, self.cols-0.5], visible=False)
-            fig.update_yaxes(showgrid=False, range=[-0.5, self.rows-0.5], visible=False)
-            
-            return fig
+        # Add "Show All" button
+        show_all_args = {f"annotations[{i}].visible": True for i in range(total_annotations)}
+        buttons.insert(0, dict(
+            label='◼ Show All',
+            method="relayout",
+            args=[show_all_args]
+        ))
         
-        def update_figure(selected_time, path_coords):
-            fig = default_figure(selected_time)
-
-            # Filter data for the selected time
-            df_time = df[df['time'] == selected_time]
-
-            # For each path we draw the flow lines for each material is not 0
-            # We update 
-
-            # Add flow connections for the selected time
-            for _, row in df_time.iterrows():
-                from_node = row['from_node']
-                to_node = row['to_node']
-                material = row['material']
-                flow = row['flow']
-
-                from_x, from_y = from_node % self.cols, from_node // self.cols
-                to_x, to_y = to_node % self.cols, to_node // self.cols
-
-                if flow > 0:
-                    fig.add_trace(plot_connections(from_x, from_y, to_x, to_y, name=material, mode='arrows', default=True))
-            
-            return fig
-        import plotly.io as pio
-        pio.show(default_figure(paths_coords))
+        return buttons
 
     def save_results(self, save_path='results.out', solution=''):
         rows = []
@@ -677,3 +632,28 @@ if __name__ == '__main__':
     solver.build_model()
     sol = solver.solve_problem()
     solver.save_results(solution=sol)
+
+    # Compare required vs actual flow to each source for each resource
+    for i, material in enumerate(solver.model.resources):
+        for j, (source, pos) in enumerate(solver.model.source_positions.items()):
+            required_flow = solver.source_O[i, j]
+            actual_flow = compute_net_flow(solver, pos, material=material, return_inflow=False)
+            actual_flow_value = float(actual_flow) if not callable(actual_flow) else actual_flow()
+            print(f"Source {source} | Position {row_index_to_node(pos, solver.cols)} | Material {material}\nRequired Supply = {required_flow}, Actual Supply = {actual_flow_value}\n")
+
+    # Compare required vs actual flow to each factory for each resource
+    for i, material in enumerate(solver.model.resources):
+        for j, (factory, pos) in enumerate(solver.model.factory_positions.items()):
+            required_dem = solver.factory_IO_resource[i, 0, j]
+            required_sup = solver.factory_IO_resource[i, 1, j]
+            actual_flow = compute_net_flow(solver, pos, material=material, return_inflow=True)
+            actual_flow_value = float(actual_flow) if not callable(actual_flow) else actual_flow()
+            print(f"Factory {factory} | Position {row_index_to_node(pos, solver.cols)} | Material {material}\nRequired Demand = {required_dem}, Required Supply = {required_sup}, Actual Inflow = {actual_flow_value}\n")
+
+    # Compare required vs actual flow to each sinkhole for each product
+    for i, material in enumerate(solver.model.products):
+        for j, (sinkhole, pos) in enumerate(solver.model.sinkhole_positions.items()):
+            required_dem = solver.sinkhole_I[i, j]
+            actual_flow = compute_net_flow(solver, pos, material=material, return_inflow=True)
+            actual_flow_value = float(actual_flow) if not callable(actual_flow) else actual_flow()
+            print(f"Sinkhole {sinkhole} | Position {row_index_to_node(pos, solver.cols)} | Material {material}\nRequired Demand = {required_dem}, Actual Inflow = {actual_flow_value}\n")

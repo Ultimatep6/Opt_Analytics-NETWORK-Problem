@@ -100,7 +100,7 @@ def compute_net_flow_total(solver, node):
     )
     return inflow - outflow
 
-def compute_net_flow(solver, node, material): # + is inflows, - is outflows
+def compute_net_flow(solver, node, material, return_inflow=None): # + is inflows, - is outflows
     """ Computed the net flow at a given node by summing inflows and outflows of a given material"""
     inflow = sum(
         solver.model.distributed_amounts[(k, node), material]
@@ -110,7 +110,12 @@ def compute_net_flow(solver, node, material): # + is inflows, - is outflows
         solver.model.distributed_amounts[(node, j), material]
         for j in all_neighbors(node, solver.rows, solver.cols)
     )
-    return inflow - outflow
+    if return_inflow:
+        return inflow
+    elif not return_inflow:
+        return -outflow
+    else:
+        return inflow - outflow
 
 def compute_required_flow(solver, object, node_type='source'):
     if node_type == 'source':
