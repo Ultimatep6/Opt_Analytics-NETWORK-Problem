@@ -182,6 +182,10 @@ def compute_total_throughput(solver, path):
     )
     return total_throughput
 
+# Convert tuple keys to strings for JSON serialization
+def tuple_key_to_str(d):
+    return {str(k): v for k, v in d.items()}
+
 if __name__ == "__main__":
     r,c = 5,5
     # print(generate_neighbor_pairings_row_major(r, c),len(generate_neighbor_pairings_row_major(r, c)))

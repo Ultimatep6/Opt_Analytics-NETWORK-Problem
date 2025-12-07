@@ -12,7 +12,7 @@ import pandas as pd
 
 from read_data import read_data
 from utils import generate_neighbor_pairings_row_major,generate_neighbor_pairings_2d, neighbors, all_neighbors, get_desc_variables, node_to_row_index, row_index_to_node
-from utils import compute_net_flow, compute_required_flow, compute_net_flow_total, compute_total_throughput
+from utils import compute_net_flow, compute_required_flow, compute_net_flow_total, compute_total_throughput, tuple_key_to_str
 
 
 class SolverV2:
@@ -81,6 +81,7 @@ class SolverV2:
             for i in range(len(self.model.sources))
         }
         self.model.source_positions = Param(self.model.sources, initialize=source_positions_dict, within=Any)
+        self.settings['source_positions'] = source_positions_dict
 
         # Sinkhole Positions
         sinkhole_positions_dict = {
@@ -88,6 +89,8 @@ class SolverV2:
             for i in range(len(self.model.sinkholes))
         }
         self.model.sinkhole_positions = Param(self.model.sinkholes, initialize=sinkhole_positions_dict, within=Any)
+        self.settings['sinkhole_positions'] = sinkhole_positions_dict
+
 
         # Factory Positions
         factory_positions_dict = {
@@ -95,21 +98,17 @@ class SolverV2:
             for i in range(len(self.model.factories))
         }
         self.model.factory_positions = Param(self.model.factories, initialize=factory_positions_dict, within=Any)
+        self.settings['factory_positions'] = factory_positions_dict
 
         # Source Supply (negative for outflow)
         source_output_matrix = self.settings['source_output_matrix']
-        source_resource_supply_dict = {
-            (self.model.resources.data()[r], self.model.sources.data()[c]): -source_output_matrix[r][c]
-            for r in range(len(self.model.resources))
-            for c in range(len(self.model.sources))
-        }
         source_supply_dict = {
             (self.model.materials.data()[r], self.model.sources.data()[c]): -source_output_matrix[r][c] if r < source_output_matrix.shape[0] else 0
             for r in range(len(self.model.materials))
             for c in range(len(self.model.sources))
         }
         self.model.source_supply = Param(self.model.materials, self.model.sources, initialize=source_supply_dict, within=Reals)
-
+        self.source_supply_dict = source_supply_dict
         # Sinkhole Demand (positive for inflow)
         sinkhole_input_matrix = self.settings['sinkhole_input_matrix']
         sinkhole_demand_dict = {
@@ -118,7 +117,7 @@ class SolverV2:
             for c in range(len(self.model.sinkholes))
         }
         self.model.sinkhole_demand = Param(self.model.materials, self.model.sinkholes, initialize=sinkhole_demand_dict, within=Reals)
-
+        self.sinkhole_demand_dict = sinkhole_demand_dict
         # Factory Resource Demand (+input) and Supply (-output)
         factory_io_resource_matrix = self.settings['factory_io_resource_matrix']
         factory_io_product_matrix = self.settings['factory_io_products_matrix']
@@ -127,12 +126,14 @@ class SolverV2:
             for r in range(len(self.model.materials))
             for f in range(len(self.model.factories))
         }
+        self.factory_demand_dict = factory_demand_dict
         self.model.factory_demand = Param(self.model.materials, self.model.factories, initialize=factory_demand_dict, within=Reals)
         factory_supply_dict = {
             (self.model.materials.data()[p], self.model.factories.data()[f]): -factory_io_resource_matrix[p][1][f] if p < factory_io_resource_matrix.shape[0] else -factory_io_product_matrix[p - factory_io_resource_matrix.shape[0]][1][f]
             for p in range(len(self.model.materials))
             for f in range(len(self.model.factories))
         }
+        self.factory_supply_dict = factory_supply_dict
         self.model.factory_supply = Param(self.model.materials, self.model.factories, initialize=factory_supply_dict, within=Reals)
 
         
@@ -152,6 +153,10 @@ class SolverV2:
             (self.unique_paths[i][1], self.unique_paths[i][0]): rand_throughput[i]
             for i in range(len(self.unique_paths))
         })
+        # Convert np.int32 values to int for JSON serialization
+        path_params_dict = {k: int(v) for k, v in path_params_dict.items()}
+        self.settings['path_params'] = tuple_key_to_str(path_params_dict)
+
         self.model.path_throughput = Param(
             self.model.connections,
             initialize=path_params_dict,
@@ -285,14 +290,34 @@ class SolverV2:
         with open(rf"./out_files/models/{model_name}", mode='rb') as file:
             self.model = cpickle.load(file)
 
+    def save_settings(self, save_path='settings.json'):
+        with open(rf'./out_files/{save_path}', 'w') as f:
+            settings_dict = self.settings.copy()
+            # Remove keys safely
+            settings_dict.pop('factory_io_resource_matrix', None)
+            settings_dict.pop('factory_io_products_matrix', None)
+            settings_dict.pop('sinkhole_input_matrix', None)
+            settings_dict.pop('source_output_matrix', None)
+
+            # Add new keys
+
+            settings_dict['source_supply_matrix'] = tuple_key_to_str(self.source_supply_dict)
+            settings_dict['factory_supply_matrix'] = tuple_key_to_str(self.factory_supply_dict)
+            settings_dict['factory_demand_matrix'] = tuple_key_to_str(self.factory_demand_dict)
+            settings_dict['sinkhole_demand_matrix'] = tuple_key_to_str(self.sinkhole_demand_dict)
+
+            print(settings_dict)
+
+            json.dump(settings_dict, f, indent=4)
+
     def load_settings(self, load_path='settings.json'):
         with open(rf'./out_files/{load_path}', 'r') as f:
             self.settings = json.load(f)
-        
-        self.model.source_output_matrix = np.array(self.settings['source_output_matrix'])
-        self.model.factory_io_resource_matrix = np.array(self.settings['factory_io_resource_matrix'])
-        self.model.factory_io_products_matrix = np.array(self.settings['factory_io_products_matrix'])
-        self.model.sinkhole_input_matrix = np.array(self.settings['sinkhole_input_matrix'])
+
+        self.model.source_supply = np.array(self.settings['source_supply_matrix'])
+        self.model.factory_supply = np.array(self.settings['factory_supply_matrix'])
+        self.model.factory_demand = np.array(self.settings['factory_demand_matrix'])
+        self.model.sinkhole_demand = np.array(self.settings['sinkhole_demand_matrix'])
 
 
     def __str__(self):
@@ -350,11 +375,12 @@ class SolverV2:
 if __name__ == "__main__":
     solver = SolverV2(solver_name='glpk', problem_dir='default.in')
     ### SETUP TEST
-    # solver.setup_model()
-    # sol = solver.solve_model()
-    # solver.save_results(save_path='results.out', solution=sol)
-    # solver.save_model_object(model_name='model_object.pkl')
+    solver.setup_model()
+    sol = solver.solve_model()
+    solver.save_results(save_path='results.out', solution=sol)
+    solver.save_settings()
+    solver.save_model_object(model_name='model_object.pkl')
 
-    ### LOADING TEST
-    solver.load_model_object(model_name='model_object.pkl')
-    solver.solve_model()
+    # ### LOADING TEST
+    # solver.load_model_object(model_name='model_object.pkl')
+    # solver.solve_model()
