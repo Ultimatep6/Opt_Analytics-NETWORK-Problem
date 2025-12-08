@@ -1,4 +1,4 @@
-Factory = function(i, j, demand, supply, size=20) {
+Factory = function(i, j, gridObj, size=20) {
     this.i = i;
     this.j = j;
 
@@ -9,6 +9,8 @@ Factory = function(i, j, demand, supply, size=20) {
 
     this.demand = {};
     this.supply = {};
+
+    this.gridObj = gridObj;
 
     this.addDemand = function(material, amount) {
         if (!this.demand[material]) {
@@ -57,5 +59,30 @@ Factory = function(i, j, demand, supply, size=20) {
         for (let material in this.supply) {
             console.log(" " + material + ": " + this.supply[material]);
         }
+    }
+
+    this.getDemandInfo = function() {
+        return this.demand;
+    }
+
+    this.getSupplyInfo = function() {
+        return this.supply;
+    }
+
+    this.stringifyInfo = function(demand = false) {
+        console.log(this.gridObj.flowColors);
+        let info = demand ? 'Demand:<br>' : 'Supply:<br>';
+        let materials = demand ? this.demand : this.supply;
+        for (let material in materials) {
+            let value = materials[material];
+            let color = "#cccccc"; // default gray
+            if (this.gridObj.flowColors && this.gridObj.flowColors[material] && value !== 0) {
+                color = this.gridObj.flowColors[material];
+            }
+            let amount = demand ? value : value * -1;
+            info += `<span style="display:inline-block;width:12px;height:12px;background:${color};margin-right:6px;border:1px solid #888;"></span>`;
+            info += `${material}: ${amount}<br>`;
+        }
+        return info;
     }
 }

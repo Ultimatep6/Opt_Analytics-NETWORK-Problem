@@ -6,6 +6,10 @@ var objSize = 15;
 // Make a Grid
 var grid = new Grid();
 
+// Declare specialInfo as a global variable
+let specialInfo;
+
+
 function getConnections(grid) {
 	for (let keyA in grid.nodes) {
 		let nodeA = grid.nodes[keyA];
@@ -45,13 +49,13 @@ function setup() {
 
 	var products = [];
 	for (var i = 0; i < n_products; i++) {
-		grid.addMaterialColor(`product_${i}`, color(random(255), random(255), random(255)));
-		products.push(`products_${i}`)
+		grid.addMaterialColor(`product_${i+1}`, color(random(255), random(255), random(255)));
+		products.push(`products_${i+1}`)
 	}
 	var resources = [];
 	for (var i = 0; i < n_resource; i++) {
-	    grid.addMaterialColor(`resource_${i}`, color(random(255), random(255), random(255)));
-		resources.push(`resource_${i}`)
+	    grid.addMaterialColor(`resource_${i+1}`, color(random(255), random(255), random(255)));
+		resources.push(`resource_${i+1}`)
 	}
 
 	// Making a 2D array
@@ -80,7 +84,7 @@ function setup() {
 
 	factoryPositions.forEach((f, idx) => {
 		console.log(`Factory ${idx}:, ${f[0]}, ${f[1]}`);
-		var fact = new Factory(f[0], f[1], objSize)
+		var fact = new Factory(f[0], f[1], grid);
 		grid.addFactory(fact);
 
 		// Add demand and supply for each product for this factory
@@ -117,7 +121,7 @@ function setup() {
 	let sinkholeDemandMatrix = settings.sinkhole_demand_matrix;
 	sinkholePositions.forEach((s, idx) => {
 		console.log(`Sinkhole ${idx}: ${s[0]}, ${s[1]}`);
-		var sink = new Sinkhole(s[0], s[1]);
+		var sink = new Sinkhole(s[0], s[1], grid);
 		grid.addSink(sink);
 
 		// Add demand for each product for this sinkhole
@@ -135,12 +139,11 @@ function setup() {
 		? settings.source_positions
 		: Object.values(settings.source_positions);
 
-
 		
 	let sourceSupplyMatrix = settings.source_supply_matrix;
 	sourcePositions.forEach((s, idx) => {
 		console.log(`Source ${idx}: ${s[0]}, ${s[1]}`);
-		var source = new Source(s[0], s[1]);
+		var source = new Source(s[0], s[1], grid);
 		grid.addSource(source);
 
 
@@ -153,6 +156,30 @@ function setup() {
 			source.addSupply(resourceKey, supply);
 		}
 	});
+	// fill('#B9FDE9');
+    // stroke(0);
+    // rect(10, gridHeight + 10, 200, 200);
+
+	// fill(0);
+	// noStroke();
+	// textSize(14);
+	// textAlign(CENTER, CENTER);
+	// textWrap(WORD);
+	// textStyle(BOLD);
+	// text("Click on a factory, sinkhole, or source to read it.", 10 , gridHeight + 30, 200);
+	
+	// Create info container
+	let config = {
+		x: 10,
+		y: gridHeight + 10,
+		width: 200,
+		border: '2px solid #000',
+		padding: '10px',
+		marginTop: '10px',
+		marginBottom: '100px',
+	};
+	specialInfo = new infoContainer(config); // Initialize the global variable
+	specialInfo.setup();
 
 	// // Draw a factory for testing
 	// grid.addFactory(new Factory(1, 1, 100, 150, objSize));
@@ -210,6 +237,11 @@ function mousePressed() {
 			if (grid.factories[key].isClicked(mouseX, mouseY)) {
 				grid.factories[key].selected = !grid.factories[key].selected; // Toggle selection
 				grid.factories[key].logFactory(); // Optional: log position
+				specialInfo.updateContent(`Factory at: ${key}`);
+				specialInfo.updateDemand(grid.factories[key]);
+				specialInfo.updateSupply(grid.factories[key]);
+				specialInfo.updateLayout();
+				
 			}
 		}
 
@@ -217,6 +249,10 @@ function mousePressed() {
 			if (grid.sinks[key].isClicked(mouseX, mouseY)) {
 				grid.sinks[key].selected = !grid.sinks[key].selected; // Toggle selection
 				grid.sinks[key].logSink(); // Optional: log position
+				specialInfo.updateContent(`Sinkhole at: ${key}`);
+				specialInfo.updateDemand(grid.sinks[key]);
+				specialInfo.clearSupply();
+				specialInfo.updateLayout();
 			}
 		}
 
@@ -224,6 +260,10 @@ function mousePressed() {
 			if (grid.sources[key].isClicked(mouseX, mouseY)) {
 				grid.sources[key].selected = !grid.sources[key].selected; // Toggle selection
 				grid.sources[key].logSource(); // Optional: log position
+				specialInfo.updateContent(`Source at: ${key}`);
+				specialInfo.clearDemand(); // Clear demand info
+				specialInfo.updateSupply(grid.sources[key]);
+				specialInfo.updateLayout();
 			}
 		}
 		else if (grid.nodes[key].isClicked(mouseX, mouseY)) {
@@ -231,6 +271,8 @@ function mousePressed() {
                 grid.nodes[key].logNode(); // Optional: log position
             }
 	}
+	
+
 }
 
 window.setup = setup;
